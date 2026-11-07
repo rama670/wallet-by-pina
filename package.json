@@ -1,0 +1,17 @@
+{
+  "name": "wallet-by-pina",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplikasi keuangan pribadi Wallet BY pina",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --env-file-if-exists=.env --watch server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.9"
+  },
+  "dependencies": {
+    "nodemailer": "^10.2.1"
+  }
+}

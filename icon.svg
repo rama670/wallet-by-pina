@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff0a8"/>
+      <stop offset=".48" stop-color="#f5bd4f"/>
+      <stop offset="1" stop-color="#d9952f"/>
+    </linearGradient>
+    <linearGradient id="wallet" x1=".15" y1="0" x2=".9" y2="1">
+      <stop offset="0" stop-color="#1c2c4b"/>
+      <stop offset="1" stop-color="#080f20"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="88" fill="#081226"/>
+  <rect x="19" y="19" width="474" height="474" rx="84" fill="none" stroke="url(#gold)" stroke-width="5"/>
+  <path d="m155 174 138-66c12-6 25 0 29 12l12 34-157 72z" fill="url(#gold)"/>
+  <path d="m160 208 147-67c12-5 26 1 31 13l12 28-167 78z" fill="#17233a" stroke="#d9a847" stroke-width="4"/>
+  <path d="M139 218c0-18 14-32 32-32h186c20 0 36 16 36 36v156c0 20-16 36-36 36H176c-20 0-37-16-37-37z" fill="url(#wallet)" stroke="url(#gold)" stroke-width="5"/>
+  <path d="M163 266c0-12 10-22 22-22h111c25 0 45 20 45 45v37c0 25-20 45-45 45h-25v-49h25c6 0 11-5 11-11v-7c0-6-5-11-11-11h-96v115h-37z" fill="url(#gold)"/>
+  <path d="M323 275h74c14 0 25 11 25 25v47c0 14-11 25-25 25h-74c-23 0-42-19-42-42v-13c0-23 19-42 42-42z" fill="#101a2e" stroke="url(#gold)" stroke-width="5"/>
+  <circle cx="355" cy="323" r="14" fill="url(#gold)"/>
+</svg>
