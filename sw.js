@@ -1,7 +1,7 @@
 const CACHE_PREFIX = 'wallet-by-pina-shell-';
 const RELEASE_HASH = '__RELEASE_HASH__';
 const CACHE_NAME = `${CACHE_PREFIX}${RELEASE_HASH}`;
-const SHELL_FILES = ['/', '/app.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
+const SHELL_FILES = ['/', '/app.js', '/qris.js', '/qr-scanner.umd.min.js', '/qr-scanner-worker.min.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 const NETWORK_FIRST_FILES = new Set(SHELL_FILES);
 
 self.addEventListener('install', event => {

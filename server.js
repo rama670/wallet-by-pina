@@ -11,6 +11,7 @@ const DATA_FILE = path.join(DATA_DIRECTORY, 'wallet-data.json');
 const SESSION_COOKIE = 'wallet_session';
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_DURATION_MS = 60 * 60 * 1000;
+const PASSWORD_RESET_MAX_TOKENS_PER_USER = 5;
 const MAX_BODY_BYTES = 64 * 1024;
 const PAYMENT_METHODS = new Set(['qris', 'transfer', 'cash', 'debit', 'other']);
 const loginAttempts = new Map();
@@ -77,6 +78,15 @@ function writeStore(store) {
   const temporaryFile = `${DATA_FILE}.tmp`;
   fs.writeFileSync(temporaryFile, JSON.stringify(store, null, 2), { mode: 0o600 });
   fs.renameSync(temporaryFile, DATA_FILE);
+}
+
+function removePasswordResetToken(tokenHash) {
+  const store = readStore();
+  const resetTokens = store.passwordResetTokens || [];
+  const remainingTokens = resetTokens.filter(item => item.tokenHash !== tokenHash);
+  if (remainingTokens.length === resetTokens.length) return;
+  store.passwordResetTokens = remainingTokens;
+  writeStore(store);
 }
 
 function send(response, status, payload, headers = {}) {
@@ -245,6 +255,9 @@ function createServer({ sendPasswordResetEmail: sendResetEmail = sendPasswordRes
 
     const staticFiles = {
       '/sw.js': { file: 'sw.js', type: 'text/javascript; charset=utf-8' },
+      '/qris.js': { file: 'qris.js', type: 'text/javascript; charset=utf-8' },
+      '/qr-scanner.umd.min.js': { file: 'node_modules/qr-scanner/qr-scanner.umd.min.js', type: 'text/javascript; charset=utf-8' },
+      '/qr-scanner-worker.min.js': { file: 'node_modules/qr-scanner/qr-scanner-worker.min.js', type: 'text/javascript; charset=utf-8' },
       '/manifest.webmanifest': { file: 'manifest.webmanifest', type: 'application/manifest+json; charset=utf-8' },
       '/icon.svg': { file: 'icon.svg', type: 'image/svg+xml' },
       '/icon-192.png': { file: 'icon-192.png', type: 'image/png' },
@@ -255,7 +268,7 @@ function createServer({ sendPasswordResetEmail: sendResetEmail = sendPasswordRes
     if (request.method === 'GET' && staticFile) {
       let asset = fs.readFileSync(path.join(__dirname, staticFile.file));
       if (url.pathname === '/sw.js') {
-        const releaseFiles = ['index.html', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
+        const releaseFiles = ['index.html', 'app.js', 'qris.js', 'node_modules/qr-scanner/qr-scanner.umd.min.js', 'node_modules/qr-scanner/qr-scanner-worker.min.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
         const releaseHash = crypto.createHash('sha256')
           .update(Buffer.concat(releaseFiles.map(file => fs.readFileSync(path.join(__dirname, file)))))
           .digest('hex');
@@ -315,21 +328,31 @@ function createServer({ sendPasswordResetEmail: sendResetEmail = sendPasswordRes
             userId: user.id,
             expiresAt: Date.now() + PASSWORD_RESET_DURATION_MS
           };
-          store.passwordResetTokens = (store.passwordResetTokens || [])
-            .filter(item => item.expiresAt > Date.now() && item.userId !== user.id);
+          const now = Date.now();
+          const activeTokens = (store.passwordResetTokens || []).filter(item => item.expiresAt > now);
+          const existingUserTokens = activeTokens
+            .filter(item => item.userId === user.id)
+            .sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0))
+            .slice(0, PASSWORD_RESET_MAX_TOKENS_PER_USER - 1);
+          store.passwordResetTokens = [
+            ...activeTokens.filter(item => item.userId !== user.id),
+            ...existingUserTokens
+          ];
           store.passwordResetTokens.push(resetToken);
+          resetToken.createdAt = now;
           writeStore(store);
           const resetUrl = new URL('/', passwordResetBaseUrl());
           resetUrl.hash = new URLSearchParams({ reset: token }).toString();
-          try {
-            await sendResetEmail({ to: user.email, url: resetUrl.toString() });
-          } catch (error) {
-            store.passwordResetTokens = store.passwordResetTokens.filter(item => item !== resetToken);
-            writeStore(store);
-            console.error('Password reset email delivery failed:', error);
-            send(response, 502, { error: 'Email pemulihan gagal dikirim. Coba lagi atau hubungi administrator.' });
-            return;
-          }
+          Promise.resolve()
+            .then(() => sendResetEmail({ to: user.email, url: resetUrl.toString() }))
+            .catch(error => {
+              console.error('Password reset email delivery failed:', error);
+              try {
+                removePasswordResetToken(resetToken.tokenHash);
+              } catch (cleanupError) {
+                console.error('Failed to remove unusable password reset token:', cleanupError);
+              }
+            });
         }
         send(response, 200, { message: 'Jika email terdaftar, tautan untuk mengatur ulang kata sandi akan dikirim.' });
         return;

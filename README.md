@@ -31,11 +31,13 @@ Open the password recovery screen directly at `https://your-site.example/#forgot
 - `SMTP_FROM`: verified sender address, for example `Wallet BY pina <wallet@example.com>`.
 - `APP_BASE_URL`: the app's public origin, for example `http://localhost:3000` locally or `https://wallet.example.com` in production. Production requires HTTPS; configure this explicitly so reset links cannot be influenced by a request's `Host` header.
 
-For Gmail SMTP, enable 2-Step Verification and create a Google App Password; do not use your regular Gmail password. The Render Blueprint preconfigures `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, and `SMTP_SECURE=false`; set `SMTP_USER` to the Gmail address, `SMTP_PASS` to the App Password, and `SMTP_FROM` to that verified address. In Render, set these under **Dashboard → wallet-by-pina → Environment**. After the first deployment, set `APP_BASE_URL` to the exact public `https://...onrender.com` service URL and redeploy. Keep passwords and app passwords in hosting secrets only; never commit them to GitHub. `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, and `APP_BASE_URL` must be entered in the dashboard. For local testing, use `http://localhost:3000` for `APP_BASE_URL` in `.env`. Reset requests return the same confirmation for registered and unregistered email addresses. If delivery fails, the request now reports an error instead of showing a false success, and the unused reset token is removed. Changing a password expires all existing sessions for that account.
+For Gmail SMTP, enable 2-Step Verification and create a Google App Password; do not use your regular Gmail password. The free Render demo does not configure password-recovery email. For a hosted deployment with email recovery, set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, and `APP_BASE_URL` in the hosting provider's environment settings. `APP_BASE_URL` must be the exact public HTTPS address. Keep passwords and app passwords in hosting secrets only; never commit them to GitHub. For local testing, use `http://localhost:3000` for `APP_BASE_URL` in `.env`. Reset requests return the same confirmation for registered and unregistered email addresses; email delivery runs in the background so the response does not reveal whether an account exists. If delivery fails, the server logs the failure and removes that unusable link without overwriting newer account data. Up to five active reset links are kept per account; using any valid link invalidates all of them. Changing a password expires all existing sessions for that account.
 
 ## QRIS transaction tracking
 
-When recording an expense, choose **QRIS** under **Metode pembayaran** and select the bank or wallet account used as its source. This records the payment method only; it does not generate a merchant QR code or process a payment.
+When recording an expense, choose **QRIS** under **Metode pembayaran**, select the source account, then choose **Pindai QRIS dengan kamera**. Allow camera access when prompted. The scanner reads valid Indonesian QRIS codes, fills in the merchant name, and fills in the amount when it is present in the code. Static QRIS codes do not contain an amount, so enter it manually. Check the merchant, amount, and source account before saving. Scanning only prepares an expense record; it does not pay the merchant or connect to a bank.
+
+Camera access requires HTTPS in production (or `localhost` during local development) and permission from the browser. Account balances are calculated from transactions recorded in this app; bank balances are not synchronized. Real bank connections require an Open Banking provider, its API documentation, and server-side credentials configured outside the source code.
 
 ## Upload to GitHub
 
@@ -56,13 +58,13 @@ git remote add origin https://github.com/<username>/<repository>.git
 git push -u origin main
 ```
 
-## Deploy to Render
+## Deploy a demo to Render
 
-The included `render.yaml` creates a Node web service with HTTPS, a health check, and a 1 GB persistent disk mounted at `/var/data`. Render's persistent disk is a paid resource; review the current plan and disk price in Render before confirming deployment. Do not remove the disk or change `WALLET_DATA_DIRECTORY` after users have created accounts, or the service will no longer see that data.
+The included `render.yaml` creates a free Node web service with HTTPS and a health check. It stores demo accounts and transactions under `/tmp/wallet-by-pina-data`, which is temporary storage: data may disappear when the service restarts, sleeps, or is redeployed. Do not use this free demo for real financial records. Password-recovery email is not configured in the demo.
 
 1. Push this project to a GitHub repository. Keep it private if it contains real financial data.
-2. In Render, choose **New → Blueprint**, connect that repository, and review the resources and price.
-3. Confirm the Blueprint. Render builds the app and provides an HTTPS address when deployment completes.
+2. In Render, choose **New → Blueprint** and connect that repository.
+3. Review the Blueprint and confirm the free service. Render builds the app and provides an HTTPS address when deployment completes.
 4. Open that HTTPS address on your phone and install the PWA from Chrome or Safari using the steps below.
 
 Render will redeploy when changes are pushed to the connected branch. The app detects changed shell assets and prompts users to apply the update.
@@ -78,6 +80,6 @@ To install from a phone, deploy the app to a server with HTTPS. Service workers 
 
 The server hashes the installable app assets into the service-worker response. When any of those assets change on deployment, browsers detect a new version; the app shows a **Perbarui** button. Confirming it activates the new app version and reloads the page. Keep `sw.js` available at the site root and preserve the app's origin and URL paths.
 
-User accounts and transactions are stored in `data/wallet-data.json`. Configure a persistent disk/volume for the `data` directory on hosted deployments so data survives restarts and redeployments. Set `NODE_ENV=production` when served over HTTPS. Set `TRUST_PROXY=true` only when the app is behind a trusted proxy that replaces incoming `X-Forwarded-For` headers.
+User accounts and transactions are stored in `data/wallet-data.json` locally. The free Render demo uses temporary storage and can lose its data. For real use, deploy with a persistent disk/volume and configure `WALLET_DATA_DIRECTORY` to point to it; do not change that directory after users have created accounts. Set `NODE_ENV=production` when served over HTTPS. Set `TRUST_PROXY=true` only when the app is behind a trusted proxy that replaces incoming `X-Forwarded-For` headers.
 
 The app requires a connection to its Node.js server for sign-in and financial API actions. The service worker only caches the app shell for offline opening; it does not queue money transactions while offline.

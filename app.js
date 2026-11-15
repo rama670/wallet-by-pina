@@ -14,6 +14,11 @@
   const categoryField = document.querySelector('#categoryField');
   const destinationField = document.querySelector('#destinationField');
   const paymentMethodField = document.querySelector('#paymentMethodField');
+  const qrisScannerField = document.querySelector('#qrisScannerField');
+  const qrisCameraWrap = document.querySelector('#qrisCameraWrap');
+  const qrisCamera = document.querySelector('#qrisCamera');
+  const qrisScanButton = document.querySelector('#scanQrisButton');
+  const qrisScannerStatus = document.querySelector('#qrisScannerStatus');
   const customDestinationField = document.querySelector('#customDestinationField');
   const customAccountField = document.querySelector('#customAccountField');
   const customAccountInput = form.elements.customAccount;
@@ -43,6 +48,7 @@
   let transactions = [];
   let budget = 0;
   let selectedType = 'expense';
+  let qrisScanner;
   let profileName = 'Keuangan Saya';
   let authMode = 'login';
   let passwordResetRequested = false;
@@ -248,6 +254,83 @@
     labels.forEach(day => context.fillText(String(day), padding.left + groupWidth * (day - .5), height - 10));
   }
 
+  function stopQrisScanner() {
+    const scanner = qrisScanner;
+    qrisScanner = undefined;
+    scanner?.destroy();
+    qrisCamera.pause();
+    qrisCamera.srcObject = null;
+    qrisCameraWrap.hidden = true;
+    qrisScanButton.disabled = false;
+    qrisScanButton.textContent = 'Pindai QRIS dengan kamera';
+  }
+
+  function updateQrisScanner() {
+    const isQrisExpense = selectedType === 'expense' && paymentMethodSelect.value === 'qris';
+    qrisScannerField.hidden = !isQrisExpense;
+    if (!isQrisExpense) {
+      stopQrisScanner();
+      qrisScannerStatus.textContent = '';
+    }
+  }
+
+  async function startQrisScanner() {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      qrisScannerStatus.textContent = 'Kamera hanya dapat digunakan di HTTPS atau localhost. Buka aplikasi melalui alamat yang aman.';
+      return;
+    }
+    if (!window.QrScanner || !window.WalletQRIS) {
+      qrisScannerStatus.textContent = 'Pemindai QR tidak tersedia. Muat ulang aplikasi saat tersambung ke internet.';
+      return;
+    }
+
+    qrisScanButton.disabled = true;
+    qrisScannerStatus.textContent = 'Meminta izin kamera…';
+    let scanner;
+    try {
+      scanner = new window.QrScanner(qrisCamera, result => {
+        const details = window.WalletQRIS.parseQRIS(result.data);
+        if (!details) {
+          qrisScannerStatus.textContent = 'Kode tidak dikenali sebagai QRIS yang valid. Arahkan kamera ke kode QRIS Indonesia.';
+          return;
+        }
+
+        stopQrisScanner();
+        if (details.merchant) form.elements.name.value = details.merchant;
+        if (details.amount) amountInput.value = details.amount.toLocaleString('id-ID');
+        qrisScannerStatus.textContent = details.amount
+          ? `QRIS ${details.merchant || 'merchant'} terbaca. Periksa nama dan nominal sebelum menyimpan; pembayaran tidak diproses.`
+          : `QRIS ${details.merchant || 'merchant'} terbaca. Isi nominal secara manual; pembayaran tidak diproses.`;
+        if (!details.amount) amountInput.focus();
+      }, { preferredCamera: 'environment', returnDetailedScanResult: true });
+      qrisScanner = scanner;
+      qrisCameraWrap.hidden = false;
+      await scanner.start();
+      if (qrisScanner !== scanner) {
+        scanner.destroy();
+        return;
+      }
+      qrisScanButton.disabled = false;
+      qrisScanButton.textContent = 'Hentikan kamera';
+      qrisScannerStatus.textContent = 'Arahkan kamera ke QRIS. Pastikan nama merchant dan nominal benar sebelum menyimpan.';
+    } catch (error) {
+      if (qrisScanner === scanner || !scanner) stopQrisScanner();
+      else scanner.destroy();
+      if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
+        qrisScannerStatus.textContent = 'Izin kamera ditolak. Izinkan kamera untuk situs ini di pengaturan browser, lalu coba lagi.';
+      } else if (error?.name === 'NotFoundError') {
+        qrisScannerStatus.textContent = 'Kamera tidak ditemukan di perangkat ini.';
+      } else if (error?.name === 'NotReadableError') {
+        qrisScannerStatus.textContent = 'Kamera sedang digunakan aplikasi lain. Tutup aplikasi tersebut lalu coba lagi.';
+      } else if (error === 'Camera not found.') {
+        qrisScannerStatus.textContent = 'Kamera tidak ditemukan di perangkat ini.';
+      } else {
+        const message = typeof error === 'string' ? error : error?.message;
+        qrisScannerStatus.textContent = `Kamera tidak dapat dibuka: ${message || 'terjadi kesalahan yang tidak diketahui.'}`;
+      }
+    }
+  }
+
   function updateCategories() {
     const isTransfer = selectedType === 'transfer';
     const isExpense = selectedType === 'expense';
@@ -257,6 +340,7 @@
     paymentMethodField.hidden = !isExpense;
     paymentMethodSelect.required = isExpense;
     if (!isExpense) paymentMethodSelect.value = '';
+    updateQrisScanner();
     amountField.style.gridColumn = isTransfer ? '1 / -1' : '';
     document.querySelector('#accountLabel').textContent = isTransfer ? 'Dari rekening' : 'Sumber / rekening';
     destinationField.hidden = !isTransfer;
@@ -412,6 +496,7 @@
     form.elements.name.focus();
   });
   document.querySelector('#closeForm').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', stopQrisScanner);
   dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
   document.querySelectorAll('.type-switch button').forEach(button => button.addEventListener('click', () => {
     selectedType = button.dataset.type;
@@ -428,6 +513,11 @@
     customDestinationField.hidden = !isCustom;
     customDestinationInput.required = isCustom;
     if (isCustom) customDestinationInput.focus();
+  });
+  paymentMethodSelect.addEventListener('change', updateQrisScanner);
+  qrisScanButton.addEventListener('click', () => {
+    if (qrisScanner) stopQrisScanner();
+    else startQrisScanner();
   });
   form.addEventListener('submit', async event => {
     event.preventDefault();

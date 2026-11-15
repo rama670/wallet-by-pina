@@ -1,8 +1,10 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { after, before, test } = require('node:test');
+const { parseQRIS } = require('./qris.js');
 
 const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wallet-by-pina-test-'));
 process.env.WALLET_DATA_DIRECTORY = dataDirectory;
@@ -15,7 +17,33 @@ let sessionCookie;
 let incomeId;
 let resetUrl;
 let failPasswordResetEmail = false;
+let passwordResetEmailGate;
+let passwordResetEmailStarted;
+let passwordResetEmailFinished;
 const transactionDate = new Date().toISOString().slice(0, 10);
+
+function makeQRIS(amount) {
+  const field = (tag, value) => `${tag}${String(value.length).padStart(2, '0')}${value}`;
+  const merchantAccount = field('00', 'ID.CO.QRIS.WWW');
+  const payload = [
+    field('00', '01'),
+    field('26', merchantAccount),
+    field('53', '360'),
+    ...(amount === undefined ? [] : [field('54', amount)]),
+    field('58', 'ID'),
+    field('59', 'WARUNG PINA'),
+    '6304'
+  ].join('');
+  let crc = 0xffff;
+  for (const character of payload) {
+    crc ^= character.charCodeAt(0) << 8;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
+      crc &= 0xffff;
+    }
+  }
+  return `${payload}${crc.toString(16).toUpperCase().padStart(4, '0')}`;
+}
 
 async function request(route, { method = 'GET', body, cookie = sessionCookie, ip = '198.51.100.10' } = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -33,9 +61,17 @@ async function request(route, { method = 'GET', body, cookie = sessionCookie, ip
 before(async () => {
   server = createServer({
     sendPasswordResetEmail: async ({ to, url }) => {
-      if (failPasswordResetEmail) throw new Error('SMTP unavailable');
-      assert.equal(to, 'pina@example.com');
-      resetUrl = url;
+      try {
+        if (passwordResetEmailGate) {
+          passwordResetEmailStarted();
+          await passwordResetEmailGate;
+        }
+        if (failPasswordResetEmail) throw new Error('SMTP unavailable');
+        assert.equal(to, 'pina@example.com');
+        resetUrl = url;
+      } finally {
+        passwordResetEmailFinished?.();
+      }
     }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -65,6 +101,14 @@ test('health endpoint responds without authentication', async () => {
   const { response, data } = await request('/health', { cookie: undefined });
   assert.equal(response.status, 200);
   assert.equal(data.status, 'ok');
+});
+
+test('QRIS scanner accepts valid merchant QR data and rejects invalid checksums', () => {
+  assert.deepEqual(parseQRIS(makeQRIS('12500')), { merchant: 'WARUNG PINA', amount: 12500 });
+  assert.deepEqual(parseQRIS(makeQRIS()), { merchant: 'WARUNG PINA' });
+  const invalidChecksum = `${makeQRIS('12500').slice(0, -1)}0`;
+  assert.equal(parseQRIS(invalidChecksum), null);
+  assert.equal(parseQRIS('https://example.test/'), null);
 });
 
 test('register creates a zero-balance account and a secure session', async () => {
@@ -186,6 +230,7 @@ test('password reset uses one-time expiring links and invalidates existing sessi
     cookie: undefined
   });
   assert.equal(newPasswordLogin.response.status, 200);
+  sessionCookie = newPasswordLogin.response.headers.get('set-cookie').split(';')[0];
 
   const reusedToken = await request('/api/password-reset/confirm', {
     method: 'POST',
@@ -215,19 +260,66 @@ test('password reset uses one-time expiring links and invalidates existing sessi
   assert.equal(expiredConfirm.response.status, 400);
 });
 
-test('password reset reports email delivery failures and removes the unusable token', async () => {
-  failPasswordResetEmail = true;
-  const { response, data } = await request('/api/password-reset/request', {
+test('password reset keeps older links and concurrent updates when email delivery fails', async () => {
+  const firstRequest = await request('/api/password-reset/request', {
     method: 'POST',
     body: { email: 'pina@example.com' },
+    cookie: undefined,
     ip: '192.0.2.54'
   });
+  assert.equal(firstRequest.response.status, 200);
+  const earlierToken = new URLSearchParams(new URL(resetUrl).hash.slice(1)).get('reset');
+
+  let signalEmailStarted;
+  const emailStarted = new Promise(resolve => { signalEmailStarted = resolve; });
+  let signalEmailFinished;
+  const emailFinished = new Promise(resolve => { signalEmailFinished = resolve; });
+  let rejectEmail;
+  passwordResetEmailGate = new Promise((resolve, reject) => { rejectEmail = reject; });
+  passwordResetEmailStarted = signalEmailStarted;
+  passwordResetEmailFinished = signalEmailFinished;
+  failPasswordResetEmail = true;
+  const pendingRequest = request('/api/password-reset/request', {
+    method: 'POST',
+    body: { email: 'pina@example.com' },
+    ip: '192.0.2.55'
+  });
+  await emailStarted;
+  const profileUpdate = await request('/api/profile', {
+    method: 'PATCH',
+    body: { name: 'Pina Updated' }
+  });
+  assert.equal(profileUpdate.response.status, 200);
+  rejectEmail(new Error('SMTP unavailable'));
+  const { response, data } = await pendingRequest;
+  await emailFinished;
+  await new Promise(resolve => setImmediate(resolve));
+  passwordResetEmailGate = undefined;
+  passwordResetEmailStarted = undefined;
+  passwordResetEmailFinished = undefined;
   failPasswordResetEmail = false;
 
-  assert.equal(response.status, 502);
-  assert.equal(data.error, 'Email pemulihan gagal dikirim. Coba lagi atau hubungi administrator.');
+  assert.equal(response.status, 200);
+  assert.match(data.message, /Jika email terdaftar/);
   const store = JSON.parse(fs.readFileSync(path.join(dataDirectory, 'wallet-data.json'), 'utf8'));
-  assert.equal(store.passwordResetTokens.some(token => token.userId === store.users[0].id), false);
+  assert.equal(store.users[0].name, 'Pina Updated');
+  assert.equal(store.passwordResetTokens.length, 1);
+  assert.equal(store.passwordResetTokens[0].tokenHash, crypto.createHash('sha256').update(earlierToken).digest('hex'));
+});
+
+test('password reset limits the number of active links per account', async () => {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const { response } = await request('/api/password-reset/request', {
+      method: 'POST',
+      body: { email: 'pina@example.com' },
+      cookie: undefined,
+      ip: `203.0.113.${attempt + 1}`
+    });
+    assert.equal(response.status, 200);
+  }
+  const store = JSON.parse(fs.readFileSync(path.join(dataDirectory, 'wallet-data.json'), 'utf8'));
+  assert.equal(store.passwordResetTokens.length, 5);
+  assert.equal(new Set(store.passwordResetTokens.map(token => token.tokenHash)).size, 5);
 });
 
 test('PWA assets are served with install metadata and a release-specific worker', async () => {
@@ -239,6 +331,9 @@ test('PWA assets are served with install metadata and a release-specific worker'
   assert.ok(manifest.icons.some(icon => icon.sizes === '512x512'));
 
   for (const [route, contentType] of [
+    ['/qris.js', /text\/javascript/],
+    ['/qr-scanner.umd.min.js', /text\/javascript/],
+    ['/qr-scanner-worker.min.js', /text\/javascript/],
     ['/icon.svg', /image\/svg\+xml/],
     ['/icon-192.png', /image\/png/],
     ['/icon-512.png', /image\/png/],
@@ -252,6 +347,7 @@ test('PWA assets are served with install metadata and a release-specific worker'
   const workerResponse = await fetch(`${baseUrl}/sw.js`);
   const workerSource = await workerResponse.text();
   assert.equal(workerResponse.status, 200);
+  assert.match(workerSource, /'\/qr-scanner-worker\.min\.js'/);
   assert.match(workerSource, /const CACHE_PREFIX = 'wallet-by-pina-shell-'/);
   assert.match(workerSource, /const RELEASE_HASH = '[a-f0-9]{64}'/);
   assert.doesNotMatch(workerSource, /__RELEASE_HASH__/);
